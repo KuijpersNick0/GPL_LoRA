@@ -2,6 +2,7 @@ import logging
 
 from .util import fullname
 
+# Should change this for LoRa lib ?
 
 class ModelCardTemplate:
     __TAGS__ = ["sentence-transformers", "feature-extraction", "sentence-similarity"]

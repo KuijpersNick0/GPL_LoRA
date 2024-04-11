@@ -58,23 +58,23 @@ class AutoModelForSentenceEmbedding(nn.Module):
         try:
             return super().__getattr__(name)  # defer to nn.Module's logic
         except AttributeError:
-            return getattr(self.model, name)
+            return getattr(self.model, name) 
         
     def tokenize(self, texts: Union[List[str], List[Dict], List[Tuple[str, str]]]):
         """
         Tokenizes the texts
         """
-        kwargs = {}
-        # HPU models reach optimal performance if the padding is not dynamic
-        if self.device.type == "hpu":
-            kwargs["padding"] = "max_length"
+        kwargs = {
+            "padding": "longest",
+            "truncation": True,
+            "max_length": self.model.config.max_position_embeddings,
+            "return_tensors": "pt"
+        }
 
-        try:
-            return self.tokenizer.encode(texts, **kwargs)
-        except TypeError:
-            # In case some Module does not allow for kwargs in tokenize, we also try without any
-            return self.tokenizer.encode(texts)
-            # return self._first_module().tokenize(texts)
+        if isinstance(texts, str):
+            texts = [texts]
+
+        return self.tokenizer(texts, **kwargs)
         
     def smart_batching_collate(self, batch: List["InputExample"]) -> Tuple[List[Dict[str, Tensor]], Tensor]:
         """
