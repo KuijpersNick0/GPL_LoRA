@@ -1,7 +1,8 @@
 import os
 import json
-import logging
-from transformers import AutoModelForSentenceEmbedding
+import logging 
+import transformers
+from transformers import AutoModel, AutoTokenizer, get_linear_schedule_with_warmup
 from peft import LoraConfig, TaskType, get_peft_model
 import torch 
 from torch import nn, Tensor, device
@@ -22,13 +23,22 @@ from .model_card_templates import ModelCardTemplate
 from .evaluation import SentenceEvaluator
 from .util import fullname, batch_to_device
 
+if TYPE_CHECKING:
+    from .InputExample import InputExample
+
 class AutoModelForSentenceEmbedding(nn.Module):
     def __init__(self, model_name, tokenizer, normalize=True):
         super(AutoModelForSentenceEmbedding, self).__init__()
 
         self.model = AutoModel.from_pretrained(model_name)  # , load_in_8bit=True, device_map={"":0})
         self.normalize = normalize
-        self.tokenizer = tokenizer
+        
+        # Getting tokenizer out of base model
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        
+        self._model_card_vars = {}
+        self._model_card_text = None
+        self._model_config = {}
 
     def forward(self, **kwargs):
         model_output = self.model(**kwargs)
@@ -49,6 +59,70 @@ class AutoModelForSentenceEmbedding(nn.Module):
             return super().__getattr__(name)  # defer to nn.Module's logic
         except AttributeError:
             return getattr(self.model, name)
+        
+    def tokenize(self, texts: Union[List[str], List[Dict], List[Tuple[str, str]]]):
+        """
+        Tokenizes the texts
+        """
+        kwargs = {}
+        # HPU models reach optimal performance if the padding is not dynamic
+        if self.device.type == "hpu":
+            kwargs["padding"] = "max_length"
+
+        try:
+            return self.tokenizer.encode(texts, **kwargs)
+        except TypeError:
+            # In case some Module does not allow for kwargs in tokenize, we also try without any
+            return self.tokenizer.encode(texts)
+            # return self._first_module().tokenize(texts)
+        
+    def smart_batching_collate(self, batch: List["InputExample"]) -> Tuple[List[Dict[str, Tensor]], Tensor]:
+        """
+        Transforms a batch from a SmartBatchingDataset to a batch of tensors for the model
+        Here, batch is a list of InputExample instances: [InputExample(...), ...]
+
+        :param batch:
+            a batch from a SmartBatchingDataset
+        :return:
+            a batch of tensors for the model
+        """
+        texts = [example.texts for example in batch]
+        sentence_features = [self.tokenize(sentence) for sentence in zip(*texts)]
+        labels = torch.tensor([example.label for example in batch])
+        return sentence_features, labels
+    
+    @staticmethod
+    def _get_scheduler(optimizer, scheduler: str, warmup_steps: int, t_total: int):
+        """
+        Returns the correct learning rate scheduler. Available scheduler: constantlr, warmupconstant, warmuplinear, warmupcosine, warmupcosinewithhardrestarts
+        """
+        scheduler = scheduler.lower()
+        if scheduler == "constantlr":
+            return transformers.get_constant_schedule(optimizer)
+        elif scheduler == "warmupconstant":
+            return transformers.get_constant_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps)
+        elif scheduler == "warmuplinear":
+            return transformers.get_linear_schedule_with_warmup(
+                optimizer, num_warmup_steps=warmup_steps, num_training_steps=t_total
+            )
+        elif scheduler == "warmupcosine":
+            return transformers.get_cosine_schedule_with_warmup(
+                optimizer, num_warmup_steps=warmup_steps, num_training_steps=t_total
+            )
+        elif scheduler == "warmupcosinewithhardrestarts":
+            return transformers.get_cosine_with_hard_restarts_schedule_with_warmup(
+                optimizer, num_warmup_steps=warmup_steps, num_training_steps=t_total
+            )
+        else:
+            raise ValueError("Unknown scheduler {}".format(scheduler))
+    
+    def _first_module(self):
+        """Returns the first module of this sequential embedder"""
+        return self._modules[next(iter(self._modules))]
+    
+    def _last_module(self):
+        """Returns the last module of this sequential embedder"""
+        return self._modules[next(reversed(self._modules))]
     
     def fit(
         self,

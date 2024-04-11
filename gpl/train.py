@@ -237,7 +237,7 @@ def train(
         #### It can load checkpoints in both SBERT-format (recommended) and Huggingface-format
         # model: SentenceTransformer = load_sbert(base_ckpt, pooling, max_seq_length)
         # Add LoRa
-        model  = load_lora(base_ckpt)
+        model = load_lora(base_ckpt)
 
         fpath_gpl_data = os.path.join(path_to_generated_data, gpl_training_data_fname)
         logger.info(f"Load GPL training data from {fpath_gpl_data}")
