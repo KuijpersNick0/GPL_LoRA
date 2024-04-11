@@ -1,5 +1,5 @@
 Skeleton GPL is forked from https://github.com/UKPLab/gpl. 
-Adapting GPL with LoRA now for my thesis.
+Adapting GPL with LoRA now for my End-Of-Work study.
 
 Will update this README later.
 
