@@ -7,6 +7,8 @@ from .evaluation import evaluate
 from .mnrl import mnrl
 from .resize import resize
 from .sbert import load_sbert, directly_loadable_by_sbert
+# Adding LoRa
+from .lora import load_lora
 from .log import set_logger_format
 from .beir import save_queries, save_qrels, extract_queries_split
 from .rescale import rescale_gpl_training_data
