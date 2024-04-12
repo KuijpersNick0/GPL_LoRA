@@ -5,6 +5,7 @@ gpl.train(
     path_to_generated_data=f"generated/{dataset}",
     base_ckpt="intfloat/e5-small-v2",  
     # intfloat/e5-small-v2
+    # distilbert-base-uncased
     # base_ckpt='GPL/msmarco-distilbert-margin-mse',  
     # The starting checkpoint of the experiments in the paper
     gpl_score_function="dot",

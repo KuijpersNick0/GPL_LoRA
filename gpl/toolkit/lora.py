@@ -65,10 +65,10 @@ class AutoModelForSentenceEmbedding(nn.Module):
         Tokenizes the texts
         """
         kwargs = {
-            "padding": "longest",
-            "truncation": True,
             "max_length": self.model.config.max_position_embeddings,
-            "return_tensors": "pt"
+            "padding": True,
+            "truncation": True,
+            "return_tensors": 'pt'
         }
 
         if isinstance(texts, str):
@@ -123,6 +123,9 @@ class AutoModelForSentenceEmbedding(nn.Module):
     def _last_module(self):
         """Returns the last module of this sequential embedder"""
         return self._modules[next(reversed(self._modules))]
+    
+    def get_sentence_features(self, *features):
+        return self._first_module().get_sentence_features(*features)
     
     def fit(
         self,
