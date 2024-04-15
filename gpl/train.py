@@ -252,7 +252,7 @@ def train(
         )
 
         # assert gpl_steps > 1000
-        model.fit(
+        model.LoRa_fit(
             [
                 (train_dataloader, train_loss),
             ],

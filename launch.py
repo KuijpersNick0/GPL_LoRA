@@ -1,4 +1,8 @@
 import gpl
+import torch 
+
+# Empty torch cache
+torch.cuda.empty_cache()
 
 dataset = 'scifact'
 gpl.train(
