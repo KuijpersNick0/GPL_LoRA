@@ -1,13 +1,13 @@
 import gpl
-import torch 
+import torch
 
-# Empty torch cache
+# Emptyy torch cache
 torch.cuda.empty_cache()
 
 dataset = 'scifact'
 gpl.train(
     path_to_generated_data=f"generated/{dataset}",
-    base_ckpt="intfloat/e5-small-v2",  
+    base_ckpt="distilbert-base-uncased",  
     # intfloat/e5-small-v2
     # distilbert-base-uncased
     # base_ckpt='GPL/msmarco-distilbert-margin-mse',  
@@ -15,7 +15,7 @@ gpl.train(
     gpl_score_function="dot",
     # Note that GPL uses MarginMSE loss, which works with dot-product
     batch_size_gpl=32,
-    gpl_steps=140000,
+    gpl_steps=1000,
     new_size=-1,
     # Resize the corpus to `new_size` (|corpus|) if needed. When set to None (by default), the |corpus| will be the full size. When set to -1, the |corpus| will be set automatically: If QPP * |corpus| <= 250K, |corpus| will be the full size; else QPP will be set 3 and |corpus| will be set to 250K / 3
     queries_per_passage=-1,
@@ -30,6 +30,6 @@ gpl.train(
     cross_encoder="cross-encoder/ms-marco-MiniLM-L-6-v2",
     qgen_prefix="qgen",
     # This prefix will appear as part of the (folder/file) names for query-generation results: For example, we will have "qgen-qrels/" and "qgen-queries.jsonl" by default.
-    do_evaluation=True,
-    # use_amp=True   # One can use this flag for enabling the efficient float16 precision
+    do_evaluation=False,
+    use_amp=True   
 )

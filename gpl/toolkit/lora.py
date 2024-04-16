@@ -10,13 +10,15 @@ from torch.utils.data import DataLoader
 from typing import List, Dict, Literal, Tuple, Iterable, Type, Union, Callable, Optional
 from tqdm.autonotebook import trange
 import os
+import time 
+import torch.profiler 
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__) 
 
 class LoRaSentenceTransformer(SentenceTransformer):
     def __init__(self, model_name_or_path: str):
         super(LoRaSentenceTransformer, self).__init__(model_name_or_path)
-        
+    
     # Custom training loop for LoRa
     def LoRa_fit(  
         self, 
@@ -66,6 +68,7 @@ class LoRaSentenceTransformer(SentenceTransformer):
         :param checkpoint_save_steps: Will save a checkpoint after so many steps.
         :param checkpoint_save_total_limit: Total number of checkpoints to store.
         """ 
+        
         if use_amp:
             if is_torch_npu_available():
                 scaler = torch.npu.amp.GradScaler()
@@ -74,11 +77,15 @@ class LoRaSentenceTransformer(SentenceTransformer):
 
         device = self.device
         self.to(device)
-
+        
+        # Score for evaluation
+        best_score = -9999999
+        
+        # Getting dataloaders and loss models (model, loss function)
         dataloaders = [dataloader for dataloader, _ in train_objectives]
         loss_models = [loss for _, loss in train_objectives]
 
-        # Use smart batching
+        # Use smart batching : Preparing data for model input
         for dataloader in dataloaders:
             dataloader.collate_fn = self.smart_batching_collate
         
@@ -86,19 +93,16 @@ class LoRaSentenceTransformer(SentenceTransformer):
         for loss_model in loss_models:
             loss_model.to(device)
 
-        best_score = -9999999
-
+        # Calculate steps_per_epoch if None or 0 (gpl_steps)
         if steps_per_epoch is None or steps_per_epoch == 0:
             steps_per_epoch = min([len(dataloader) for dataloader in dataloaders])
 
-        num_train_steps = int(steps_per_epoch * epochs)
-
         # Prepare optimizers and schedulers
+        num_train_steps = int(steps_per_epoch * epochs)
         optimizers = []
         schedulers = []
-        for loss_model in loss_models:
-            param_optimizer = list(loss_model.named_parameters())
-
+        for loss_model in loss_models: 
+            param_optimizer = list(loss_model.named_parameters()) 
             no_decay = ["bias", "LayerNorm.bias", "LayerNorm.weight"]
             optimizer_grouped_parameters = [
                 {
@@ -107,102 +111,127 @@ class LoRaSentenceTransformer(SentenceTransformer):
                 },
                 {"params": [p for n, p in param_optimizer if any(nd in n for nd in no_decay)], "weight_decay": 0.0},
             ]
-
             optimizer = optimizer_class(optimizer_grouped_parameters, **optimizer_params)
             scheduler_obj = self._get_scheduler(
                 optimizer, scheduler=scheduler, warmup_steps=warmup_steps, t_total=num_train_steps
             )
-
             optimizers.append(optimizer)
             schedulers.append(scheduler_obj)
 
+
+        # some configurations
         global_step = 0
-        data_iterators = [iter(dataloader) for dataloader in dataloaders]
-
-        num_train_objectives = len(train_objectives)
-
-        skip_scheduler = False
+        data_iterators = [iter(dataloader) for dataloader in dataloaders] 
+        num_train_objectives = len(train_objectives) 
+        skip_scheduler = False 
+        
+        # Start training loop (over epochs)
         for epoch in trange(epochs, desc="Epoch", disable=not show_progress_bar):
-            training_steps = 0
-
+            training_steps = 0  
+            
+            # Reset loss models and put in training mode
             for loss_model in loss_models:
                 loss_model.zero_grad()
                 loss_model.train()
 
-            for _ in trange(steps_per_epoch, desc="Iteration", smoothing=0.05, disable=not show_progress_bar):
-                for train_idx in range(num_train_objectives):
-                    loss_model = loss_models[train_idx]
-                    optimizer = optimizers[train_idx]
-                    scheduler = schedulers[train_idx]
-                    data_iterator = data_iterators[train_idx]
+            # torch profiler for analytics
+            with torch.profiler.profile(
+                schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=1),
+                on_trace_ready=torch.profiler.tensorboard_trace_handler('./log/lora1'),
+                record_shapes=True,
+                profile_memory=True,
+                with_stack=True
+            ) as prof:
+                # start training loop (over steps)
+                for _ in trange(steps_per_epoch, desc="Iteration", smoothing=0.05, disable=not show_progress_bar):
+                    for train_idx in range(num_train_objectives):
+                        # necessary step for profiler
+                        prof.step() 
+                        # Selecting correct loss, optm,scheduler and data iterator
+                        loss_model = loss_models[train_idx]
+                        optimizer = optimizers[train_idx]
+                        scheduler = schedulers[train_idx]
+                        data_iterator = data_iterators[train_idx]
 
-                    try:
-                        data = next(data_iterator)
-                    except StopIteration:
-                        data_iterator = iter(dataloaders[train_idx])
-                        data_iterators[train_idx] = data_iterator
-                        data = next(data_iterator)
+                        # Get next batch
+                        try:
+                            data = next(data_iterator)
+                        except StopIteration:
+                            data_iterator = iter(dataloaders[train_idx])
+                            data_iterators[train_idx] = data_iterator
+                            data = next(data_iterator)
 
-                    features, labels = data
-                    labels = labels.to(device)
-                    features = list(map(lambda batch: self.batch_to_device(batch, device), features))
-
-                    if use_amp:
-                        with torch.autocast(device_type=device.type):
+                        # Move batch to correct device
+                        features, labels = data
+                        labels = labels.to(device)
+                        features = list(map(lambda batch: self.batch_to_device(batch, device), features))
+                            
+                        if use_amp:
+                            # calculate loss with AMP
+                            with torch.autocast(device_type=device.type): 
+                                loss_value = loss_model(features, labels)
+                            # Get scaler because using AMP
+                            scale_before_step = scaler.get_scale() 
+                            # Backward pass scaled
+                            scaler.scale(loss_value).backward()
+                            # unscale for optimizer
+                            scaler.unscale_(optimizer) 
+                            # clipping gradients
+                            torch.nn.utils.clip_grad_norm_(loss_model.parameters(), max_grad_norm)
+                            # perform optimizer step using scaled gradients
+                            scaler.step(optimizer)
+                            # update scaler for next iteration
+                            scaler.update()
+                            # check if scheduler step should be skipped
+                            skip_scheduler = scaler.get_scale() != scale_before_step
+                        else:
+                            print("Not using AMP")
                             loss_value = loss_model(features, labels)
+                            loss_value.backward()
+                            torch.nn.utils.clip_grad_norm_(loss_model.parameters(), max_grad_norm)
+                            optimizer.step() 
+                            
+                        # resetting gradients
+                        optimizer.zero_grad() 
+                        if not skip_scheduler:
+                            scheduler.step()
+                    
+                    # Update steps
+                    training_steps += 1
+                    global_step += 1
+                    
+                    # Evaluation during training (evaluation_steps)
+                    if evaluation_steps > 0 and training_steps % evaluation_steps == 0:
+                        self._eval_during_training(
+                            evaluator, output_path, save_best_model, epoch, training_steps, callback
+                        )
+                        # After evaluation, reset loss models and put in training mode
+                        for loss_model in loss_models:
+                            loss_model.zero_grad()
+                            loss_model.train()
 
-                        scale_before_step = scaler.get_scale()
-                        scaler.scale(loss_value).backward()
-                        scaler.unscale_(optimizer)
-                        torch.nn.utils.clip_grad_norm_(loss_model.parameters(), max_grad_norm)
-                        scaler.step(optimizer)
-                        scaler.update()
+                    # Save checkpoint during training 
+                    if (
+                        checkpoint_path is not None
+                        and checkpoint_save_steps is not None
+                        and checkpoint_save_steps > 0
+                        and global_step % checkpoint_save_steps == 0
+                    ):
+                        self._save_checkpoint(checkpoint_path, checkpoint_save_total_limit, global_step)
 
-                        skip_scheduler = scaler.get_scale() != scale_before_step
-                    else:
-                        loss_value = loss_model(features, labels)
-                        loss_value.backward()
-                        torch.nn.utils.clip_grad_norm_(loss_model.parameters(), max_grad_norm)
-                        optimizer.step()
-
-                    optimizer.zero_grad()
-
-                    if not skip_scheduler:
-                        scheduler.step()
-
-                training_steps += 1
-                global_step += 1
-
-                if evaluation_steps > 0 and training_steps % evaluation_steps == 0:
-                    self._eval_during_training(
-                        evaluator, output_path, save_best_model, epoch, training_steps, callback
-                    )
-
-                    for loss_model in loss_models:
-                        loss_model.zero_grad()
-                        loss_model.train()
-
-                if (
-                    checkpoint_path is not None
-                    and checkpoint_save_steps is not None
-                    and checkpoint_save_steps > 0
-                    and global_step % checkpoint_save_steps == 0
-                ):
-                    self._save_checkpoint(checkpoint_path, checkpoint_save_total_limit, global_step)
-
+            # Evaluation after each epoch
             self._eval_during_training(evaluator, output_path, save_best_model, epoch, -1, callback)
-
-        if evaluator is None and output_path is not None:  # No evaluator, but output path: save final model version
-            # model.save(output_path)
-            self.save_pretrained("outputs_lora")
-
+        
+        # No evaluator, but output path: save final model version
+        if evaluator is None and output_path is not None:  
+            self.save(output_path)  
+        # Save final model in checkpoint format
         if checkpoint_path is not None:
-            # model._save_checkpoint(checkpoint_path, checkpoint_save_total_limit, global_step)
-            self.save_pretrained("outputs_lora " + str(global_step) + " steps")
+            self._save_checkpoint(checkpoint_path, checkpoint_save_total_limit, global_step) 
           
     def batch_to_device(self, batch, target_device: device):
         """
-        send a pytorch batch to a device (CPU/GPU)
+        Send a pytorch batch to a device (CPU/GPU)
         """
         for key in batch:
             if isinstance(batch[key], Tensor):
@@ -265,9 +294,14 @@ def directly_loadable_by_sbert(model: SentenceTransformer):
             loadable_by_sbert = False
     return loadable_by_sbert
 
+def freeze_base_model(model):
+    for param in model.parameters():
+        param.requires_grad = False
 
 def load_lora(model_name_or_path, pooling=None, max_seq_length=None):
     model = LoRaSentenceTransformer(model_name_or_path)
+    
+    freeze_base_model(model)
     
     peft_config = None
 
@@ -320,12 +354,14 @@ def load_lora(model_name_or_path, pooling=None, max_seq_length=None):
  
     # Use a default LoRA configuration
     peft_config = LoraConfig(
-        r=1,
-        lora_alpha=1,
+        r=8,
+        lora_alpha=32,
+        lora_dropout=0.05,
         bias="none",
         # task_type=TaskType.FEATURE_EXTRACTION,
-        # inference_mode=False,
-        target_modules=["key", "query", "value"],
+        inference_mode=False,
+        # target_modules=["key", "query", "value"],
+        target_modules=["q_lin", "k_lin","v_lin"],
     )
     
     # # Layers before Lora
@@ -338,7 +374,12 @@ def load_lora(model_name_or_path, pooling=None, max_seq_length=None):
         
     model = get_peft_model(model, peft_config)
     model.print_trainable_parameters()
-    
+      
+    # inputs = torch.randn(1, 128, 768)
+    # with profile(activities=[ProfilerActivity.CPU], record_shapes=True) as prof:
+    #     with record_function("model_inference"):
+    #         model(inputs)
+        
     # Layers after Lora
     # print("/n Printing layers /n")
     # for n, m in model.named_modules():
