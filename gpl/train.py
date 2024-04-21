@@ -266,7 +266,7 @@ def train(
             use_amp=use_amp,
         )
     else:
-        logger.info("Trained GPL model found. Now skip training")
+        logger.info("Trained GPL model found. Now skip training") 
 
     ### Evaluate the model if required ###
     if do_evaluation:
