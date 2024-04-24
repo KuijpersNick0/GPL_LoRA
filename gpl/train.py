@@ -279,6 +279,7 @@ def train(
             score_function=gpl_score_function,
             pooling=pooling,
             split=eval_split,
+            gpl_steps=gpl_steps,
         )
 
     ### Train and evaluate QGen

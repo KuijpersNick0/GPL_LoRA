@@ -41,7 +41,7 @@ class LoRaSentenceTransformer(SentenceTransformer):
         show_progress_bar=True,
         checkpoint_path=None,
         checkpoint_save_steps=500,
-        checkpoint_save_total_limit=0,
+        checkpoint_save_total_limit=10000,
         ):
         """
         Train the model with the given training objective using LoRa (PEFT) technique.
@@ -119,7 +119,6 @@ class LoRaSentenceTransformer(SentenceTransformer):
             )
             optimizers.append(optimizer)
             schedulers.append(scheduler_obj)
-
 
         # some configurations
         global_step = 0
@@ -227,6 +226,7 @@ class LoRaSentenceTransformer(SentenceTransformer):
         # Save the model at the end of training with merging LoRa layers and model
         # This is unifficient for now (memory++), but incompatibilities between libraries are causing this
         loss_model.model.base_model.merge_and_unload()
+        
         # No evaluator, but output path: save final model version
         if evaluator is None and output_path is not None:  
             self.save(output_path)   
@@ -285,12 +285,7 @@ class LoRaSentenceTransformer(SentenceTransformer):
                     if save_best_model:
                         self.save(output_path)
     
-    def _load_model(self, model_name_or_path, cache_dir):
-        """Loads the transformer model""" 
-        print("wazzaaaa")
-        self.auto_model = AutoModel.from_pretrained(
-            model_name_or_path,  cache_dir=cache_dir
-        )
+
 
     
 def directly_loadable_by_sbert(model: SentenceTransformer):

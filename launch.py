@@ -4,10 +4,13 @@ import torch
 # Emptyy torch cache
 torch.cuda.empty_cache()
 
+# outside for reusability
+base_ckpt="distilbert-base-uncased"
+
 dataset = 'scifact'
 gpl.train(
     path_to_generated_data=f"generated/{dataset}",
-    base_ckpt="distilbert-base-uncased",  
+    base_ckpt=base_ckpt,  
     # intfloat/e5-small-v2
     # distilbert-base-uncased
     # base_ckpt='GPL/msmarco-distilbert-margin-mse',  
@@ -15,14 +18,14 @@ gpl.train(
     gpl_score_function="dot",
     # Note that GPL uses MarginMSE loss, which works with dot-product
     batch_size_gpl=16,
-    gpl_steps=1000,
+    gpl_steps=10,
     new_size=-1,
     # Resize the corpus to `new_size` (|corpus|) if needed. When set to None (by default), the |corpus| will be the full size. When set to -1, the |corpus| will be set automatically: If QPP * |corpus| <= 250K, |corpus| will be the full size; else QPP will be set 3 and |corpus| will be set to 250K / 3
     queries_per_passage=-1,
     # Number of Queries Per Passage (QPP) in the query generation step. When set to -1 (by default), the QPP will be chosen automatically: If QPP * |corpus| <= 250K, then QPP will be set to 250K / |corpus|; else QPP will be set 3 and |corpus| will be set to 250K / 3
-    output_dir=f"output/{dataset}",
+    output_dir=f"output/{dataset}/{base_ckpt}",
     evaluation_data=f"./{dataset}",
-    evaluation_output=f"evaluation/{dataset}",
+    evaluation_output=f"evaluation/{dataset}/{base_ckpt}",
     generator="BeIR/query-gen-msmarco-t5-base-v1",
     retrievers=["msmarco-distilbert-base-v3", "msmarco-MiniLM-L-6-v3"],
     retriever_score_functions=["cos_sim", "cos_sim"],
@@ -31,6 +34,6 @@ gpl.train(
     qgen_prefix="qgen",
     # This prefix will appear as part of the (folder/file) names for query-generation results: For example, we will have "qgen-qrels/" and "qgen-queries.jsonl" by default.
     do_evaluation=True,
-    use_amp=True,
-    eval_split="train",
+    # use_amp=True,
+    eval_split="test",
 )

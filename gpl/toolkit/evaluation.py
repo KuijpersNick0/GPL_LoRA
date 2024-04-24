@@ -29,6 +29,7 @@ def evaluate(
     sep: str = " ",
     k_values: List[int] = [1, 3, 5, 10, 20, 100],
     split: str = "test",
+    gpl_steps: int = 100,
 ):
 
     model: SentenceTransformer = load_sbert(model_name_or_path, pooling, max_seq_length)
@@ -111,10 +112,13 @@ def evaluate(
     mrr = {k: np.mean([score[k] for score in mrrs]) for k in mrr}
 
     os.makedirs(output_dir, exist_ok=True)
-    result_path = os.path.join(output_dir, "results.json")
+    result_path = os.path.join(output_dir, f"results_{gpl_steps}.json")
     with open(result_path, "w") as f:
         json.dump(
             {
+                "model_name_or_path": model_name_or_path,
+                "gpl_steps": gpl_steps, 
+                "data_path": data_path,
                 "ndcg": ndcg,
                 "map": _map,
                 "recall": recall,
