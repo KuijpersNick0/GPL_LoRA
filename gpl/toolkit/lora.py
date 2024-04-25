@@ -12,14 +12,16 @@ from tqdm.autonotebook import trange
 import os
 import time  
 import torch.profiler 
+import json 
+import numpy as np
 
 logger = logging.getLogger(__name__) 
 
 class LoRaSentenceTransformer(SentenceTransformer):
     def __init__(self, model_name_or_path: str):
         super(LoRaSentenceTransformer, self).__init__(model_name_or_path)
+        self.training_data = [] 
         
-    
     # Custom training loop for LoRa
     def LoRa_fit(  
         self, 
@@ -28,7 +30,7 @@ class LoRaSentenceTransformer(SentenceTransformer):
         epochs=1,
         steps_per_epoch=None,
         scheduler="WarmupLinear",
-        warmup_steps=10000,
+        warmup_steps=1000,
         optimizer_class=torch.optim.AdamW,
         optimizer_params={"lr": 2e-5},
         weight_decay=0.01,
@@ -77,9 +79,11 @@ class LoRaSentenceTransformer(SentenceTransformer):
 
         device = self.device
         self.to(device)
-        
-        # Score for evaluation
-        best_score = -9999999
+         
+        # For logging purposes
+        training_losses = np.empty(steps_per_epoch)
+        learning_rates = np.empty(steps_per_epoch)
+        gradient_norms = np.empty(steps_per_epoch)
         
         # Getting dataloaders and loss models (model, loss function)
         dataloaders = [dataloader for dataloader, _ in train_objectives]
@@ -102,9 +106,7 @@ class LoRaSentenceTransformer(SentenceTransformer):
         optimizers = []
         schedulers = []
         for loss_model in loss_models: 
-            param_optimizer = list(loss_model.named_parameters()) 
-            print("param_optimizer")
-            print(param_optimizer)
+            param_optimizer = list(loss_model.named_parameters())  
             no_decay = ["bias", "LayerNorm.bias", "LayerNorm.weight"]
             optimizer_grouped_parameters = [
                 {
@@ -133,12 +135,12 @@ class LoRaSentenceTransformer(SentenceTransformer):
             # Reset loss models and put in training mode
             for loss_model in loss_models:
                 loss_model.zero_grad()
-                loss_model.train()
-
+                loss_model.train() 
+                
             # torch profiler for analytics
             with torch.profiler.profile(
-                schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=1),
-                on_trace_ready=torch.profiler.tensorboard_trace_handler('./log/lora1'),
+                schedule=torch.profiler.schedule(wait=1, warmup=10, active=3, repeat=1),
+                on_trace_ready=torch.profiler.tensorboard_trace_handler(f"./log/{output_path}"),
                 record_shapes=True,
                 profile_memory=True,
                 with_stack=True
@@ -179,14 +181,19 @@ class LoRaSentenceTransformer(SentenceTransformer):
                             scaler.unscale_(optimizer) 
                             # clipping gradients
                             torch.nn.utils.clip_grad_norm_(loss_model.parameters(), max_grad_norm)
+                            # Save gradient norm after clipping
+                            gradient_norms[training_steps] = torch.nn.utils.clip_grad_norm_(loss_model.parameters(), max_grad_norm)
+                            # Save loss value
+                            training_losses[training_steps] = loss_value.item()
+                            # Save learning rate from optimizer
+                            learning_rates[training_steps] = optimizer.param_groups[0]['lr']
                             # perform optimizer step using scaled gradients
                             scaler.step(optimizer)
                             # update scaler for next iteration
                             scaler.update()
                             # check if scheduler step should be skipped
                             skip_scheduler = scaler.get_scale() != scale_before_step
-                        else:
-                            print("Not using AMP")
+                        else: 
                             loss_value = loss_model(features, labels)
                             loss_value.backward()
                             torch.nn.utils.clip_grad_norm_(loss_model.parameters(), max_grad_norm)
@@ -200,16 +207,6 @@ class LoRaSentenceTransformer(SentenceTransformer):
                     # Update steps
                     training_steps += 1
                     global_step += 1
-                    
-                    # Evaluation during training (evaluation_steps)
-                    if evaluation_steps > 0 and training_steps % evaluation_steps == 0:
-                        self._eval_during_training(
-                            evaluator, output_path, save_best_model, epoch, training_steps, callback
-                        )
-                        # After evaluation, reset loss models and put in training mode
-                        for loss_model in loss_models:
-                            loss_model.zero_grad()
-                            loss_model.train()
 
                     # Save checkpoint during training 
                     if (
@@ -219,10 +216,10 @@ class LoRaSentenceTransformer(SentenceTransformer):
                         and global_step % checkpoint_save_steps == 0
                     ):
                         self._save_checkpoint(checkpoint_path, checkpoint_save_total_limit, global_step)
-            
-            # Evaluation after each epoch
-            self._eval_during_training(evaluator, output_path, save_best_model, epoch, -1, callback)
         
+        # Save loss, learning rate, gradient norms per epoch => will map out evolution over training steps
+        self.save_training_data(training_losses, learning_rates, gradient_norms, output_path)
+            
         # Save the model at the end of training with merging LoRa layers and model
         # This is unifficient for now (memory++), but incompatibilities between libraries are causing this
         loss_model.model.base_model.merge_and_unload()
@@ -268,25 +265,15 @@ class LoRaSentenceTransformer(SentenceTransformer):
         else:
             raise ValueError("Unknown scheduler {}".format(scheduler))
         
-    def _eval_during_training(self, evaluator, output_path, save_best_model, epoch, steps, callback):
-            """Runs evaluation during the training"""
-            eval_path = output_path
-            if output_path is not None:
-                os.makedirs(output_path, exist_ok=True)
-                eval_path = os.path.join(output_path, "eval")
-                os.makedirs(eval_path, exist_ok=True)
-
-            if evaluator is not None:
-                score = evaluator(self, output_path=eval_path, epoch=epoch, steps=steps)
-                if callback is not None:
-                    callback(score, epoch, steps)
-                if score > self.best_score:
-                    self.best_score = score
-                    if save_best_model:
-                        self.save(output_path)
-    
-
-
+    def save_training_data(self, loss, learning_rate, gradient_norm, output_path):
+        total_steps = len(loss)
+        steps = np.arange(total_steps)
+        self.training_data.append({"steps": steps.tolist(), "loss": loss.tolist(), "learning_rate": learning_rate.tolist(), "gradient_norm": gradient_norm.tolist()}) 
+        training_data_path = f"{output_path}/training_data.json"
+        os.makedirs(os.path.dirname(training_data_path), exist_ok=True)
+        with open(training_data_path, "w") as f:
+            json.dump(self.training_data, f, indent=4)
+            self.training_data.clear()
     
 def directly_loadable_by_sbert(model: SentenceTransformer):
     loadable_by_sbert = True
@@ -308,40 +295,39 @@ def freeze_base_model(model):
 
 def load_lora(model_name_or_path, pooling=None, max_seq_length=None):
     model = LoRaSentenceTransformer(model_name_or_path)
-    freeze_base_model(model)
-    peft_config = None
+    freeze_base_model(model) 
     ## Check whether SBERT can load the checkpoint and use it
-    # loadable_by_sbert = directly_loadable_by_sbert(model)
-    # if loadable_by_sbert:
-    #     ## Loadable by SBERT directly
-    #     ## Mainly two cases: (1) The checkpoint is in SBERT-format (e.g. "bert-base-nli-mean-tokens"); (2) it is in HF-format but the last layer can provide a hidden state for each token (e.g. "bert-base-uncased")
-    #     ## NOTICE: Even for (2), there might be some checkpoints (e.g. "princeton-nlp/sup-simcse-bert-base-uncased") that uses a linear layer on top of the CLS token embedding to get the final dense representation. In this case, setting `--pooling` to a specify pooling method will misuse the checkpoint. This is why we recommend to use SBERT-format if possible
-    #     ## Setting pooling if needed
-    #     if pooling is not None:
-    #         logger.warning(
-    #             f"Trying setting pooling method manually (`--pooling={pooling}`). Recommand to use a checkpoint in SBERT-format and leave the `--pooling=None`: This is less likely to misuse the pooling"
-    #         )
-    #         last_layer: models.Pooling = model[-1]
-    #         assert (
-    #             type(last_layer) == models.Pooling
-    #         ), f"The last layer is not a pooling layer and thus `--pooling={pooling}` cannot work. Please try leaving `--pooling=None` as in the default setting"
-    #         # We here change the pooling by building the whole SBERT model again, which is safer and more maintainable than setting the attributes of the Pooling module
-    #         word_embedding_model = models.Transformer(
-    #             model_name_or_path, max_seq_length=max_seq_length
-    #         )
-    #         pooling_model = models.Pooling(
-    #             word_embedding_model.get_word_embedding_dimension(),
-    #             pooling_mode=pooling,
-    #         )
-    #         print(word_embedding_model)
-    #         print(pooling_model)
-    #         model = SentenceTransformer(modules=[word_embedding_model, pooling_model])
-    # else:
-    #     ## Not directly loadable by SBERT
-    #     ## Mainly one case: The last layer is a linear layer (e.g. "facebook/dpr-question_encoder-single-nq-base")
-    #     raise NotImplementedError(
-    #         "This checkpoint cannot be directly loadable by SBERT. Please transform it into SBERT-format first and then try again. Please pay attention to its last layer"
-    #     )
+    loadable_by_sbert = directly_loadable_by_sbert(model)
+    if loadable_by_sbert:
+        ## Loadable by SBERT directly
+        ## Mainly two cases: (1) The checkpoint is in SBERT-format (e.g. "bert-base-nli-mean-tokens"); (2) it is in HF-format but the last layer can provide a hidden state for each token (e.g. "bert-base-uncased")
+        ## NOTICE: Even for (2), there might be some checkpoints (e.g. "princeton-nlp/sup-simcse-bert-base-uncased") that uses a linear layer on top of the CLS token embedding to get the final dense representation. In this case, setting `--pooling` to a specify pooling method will misuse the checkpoint. This is why we recommend to use SBERT-format if possible
+        ## Setting pooling if needed
+        if pooling is not None:
+            logger.warning(
+                f"Trying setting pooling method manually (`--pooling={pooling}`). Recommand to use a checkpoint in SBERT-format and leave the `--pooling=None`: This is less likely to misuse the pooling"
+            )
+            last_layer: models.Pooling = model[-1]
+            assert (
+                type(last_layer) == models.Pooling
+            ), f"The last layer is not a pooling layer and thus `--pooling={pooling}` cannot work. Please try leaving `--pooling=None` as in the default setting"
+            # We here change the pooling by building the whole SBERT model again, which is safer and more maintainable than setting the attributes of the Pooling module
+            word_embedding_model = models.Transformer(
+                model_name_or_path, max_seq_length=max_seq_length
+            )
+            pooling_model = models.Pooling(
+                word_embedding_model.get_word_embedding_dimension(),
+                pooling_mode=pooling,
+            )
+            print(word_embedding_model)
+            print(pooling_model)
+            model = SentenceTransformer(modules=[word_embedding_model, pooling_model])
+    else:
+        ## Not directly loadable by SBERT
+        ## Mainly one case: The last layer is a linear layer (e.g. "facebook/dpr-question_encoder-single-nq-base")
+        raise NotImplementedError(
+            "This checkpoint cannot be directly loadable by SBERT. Please transform it into SBERT-format first and then try again. Please pay attention to its last layer"
+        )
 
     ## Setting max_seq_length if needed
     if max_seq_length is not None:
@@ -397,54 +383,4 @@ def load_lora(model_name_or_path, pooling=None, max_seq_length=None):
     #     print(module)
     # print() 
     
-    return model
-
-
-    model = SentenceTransformer(model_name_or_path)
-
-    ## Check whether SBERT can load the checkpoint and use it
-    loadable_by_sbert = directly_loadable_by_sbert(model)
-    if loadable_by_sbert:
-        ## Loadable by SBERT directly
-        ## Mainly two cases: (1) The checkpoint is in SBERT-format (e.g. "bert-base-nli-mean-tokens"); (2) it is in HF-format but the last layer can provide a hidden state for each token (e.g. "bert-base-uncased")
-        ## NOTICE: Even for (2), there might be some checkpoints (e.g. "princeton-nlp/sup-simcse-bert-base-uncased") that uses a linear layer on top of the CLS token embedding to get the final dense representation. In this case, setting `--pooling` to a specify pooling method will misuse the checkpoint. This is why we recommend to use SBERT-format if possible
-        ## Setting pooling if needed
-        if pooling is not None:
-            logger.warning(
-                f"Trying setting pooling method manually (`--pooling={pooling}`). Recommand to use a checkpoint in SBERT-format and leave the `--pooling=None`: This is less likely to misuse the pooling"
-            )
-            last_layer: models.Pooling = model[-1]
-            assert (
-                type(last_layer) == models.Pooling
-            ), f"The last layer is not a pooling layer and thus `--pooling={pooling}` cannot work. Please try leaving `--pooling=None` as in the default setting"
-            # We here change the pooling by building the whole SBERT model again, which is safer and more maintainable than setting the attributes of the Pooling module
-            word_embedding_model = models.Transformer(
-                model_name_or_path, max_seq_length=max_seq_length
-            )
-            pooling_model = models.Pooling(
-                word_embedding_model.get_word_embedding_dimension(),
-                pooling_mode=pooling,
-            )
-            model = SentenceTransformer(modules=[word_embedding_model, pooling_model])
-    else:
-        ## Not directly loadable by SBERT
-        ## Mainly one case: The last layer is a linear layer (e.g. "facebook/dpr-question_encoder-single-nq-base")
-        raise NotImplementedError(
-            "This checkpoint cannot be directly loadable by SBERT. Please transform it into SBERT-format first and then try again. Please pay attention to its last layer"
-        )
-
-    ## Setting max_seq_length if needed
-    if max_seq_length is not None:
-        first_layer: models.Transformer = model[0]
-        assert (
-            type(first_layer) == models.Transformer
-        ), "Unknown error, please report this"
-        assert hasattr(
-            first_layer, "max_seq_length"
-        ), "Unknown error, please report this"
-        setattr(
-            first_layer, "max_seq_length", max_seq_length
-        )  # Set the maximum-sequence length
-        logger.info(f"Set max_seq_length={max_seq_length}")
-
     return model

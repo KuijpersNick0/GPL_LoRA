@@ -252,17 +252,18 @@ def train(
         )
 
         # assert gpl_steps > 1000
+        checkpoint_path = f"{output_dir}/checkpoints"
         model.LoRa_fit(
             [
                 (train_dataloader, train_loss),
             ],
             epochs=1,
             steps_per_epoch=gpl_steps,
-            warmup_steps=1000,
-            checkpoint_save_steps=10000,
+            warmup_steps=500,
+            checkpoint_save_steps=500,
             checkpoint_save_total_limit=10000,
             output_path=output_dir,
-            checkpoint_path=output_dir,
+            checkpoint_path=checkpoint_path,
             use_amp=use_amp,
         )
     else:

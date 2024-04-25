@@ -2,6 +2,7 @@ from torch import nn, Tensor
 from typing import Iterable, Dict
 from torch.nn import functional as F
 import logging
+import torch
 
 logger = logging.getLogger(__name__)
 
@@ -30,17 +31,15 @@ class MarginDistillationLoss(nn.Module):
             self.model(sentence_feature)["sentence_embedding"]
             for sentence_feature in sentence_features
         ]
-        embeddings_query = reps[0]
-        embeddings_pos = reps[1]
-        embeddings_neg = reps[2]
+        embeddings_query, embeddings_pos, embeddings_neg = reps
 
         if self.similarity_fct == "cosine":
             embeddings_query = F.normalize(embeddings_query, dim=-1)
             embeddings_pos = F.normalize(embeddings_pos, dim=-1)
             embeddings_neg = F.normalize(embeddings_neg, dim=-1)
 
-        scores_pos = (embeddings_query * embeddings_pos).sum(dim=-1) * self.scale
-        scores_neg = (embeddings_query * embeddings_neg).sum(dim=-1) * self.scale
+        scores_pos = torch.sum(embeddings_query * embeddings_pos, dim=-1) * self.scale
+        scores_neg = torch.sum(embeddings_query * embeddings_neg, dim=-1) * self.scale
         margin_pred = scores_pos - scores_neg
 
         return self.loss_fct(margin_pred, labels)
