@@ -10,6 +10,8 @@ from torch.utils.data import DataLoader
 from typing import List, Dict, Literal, Tuple, Iterable, Type, Union, Callable, Optional
 from tqdm.autonotebook import trange
 import os
+import shutil
+import tensorflow as tf
 import time  
 import torch.profiler 
 import json 
@@ -42,7 +44,7 @@ class LoRaSentenceTransformer(SentenceTransformer):
         callback=None,
         show_progress_bar=True,
         checkpoint_path=None,
-        checkpoint_save_steps=500,
+        checkpoint_save_steps=100,
         checkpoint_save_total_limit=10000,
         ):
         """
@@ -215,8 +217,10 @@ class LoRaSentenceTransformer(SentenceTransformer):
                         and checkpoint_save_steps > 0
                         and global_step % checkpoint_save_steps == 0
                     ):
+                        loss_model.model.base_model.merge_adapter()
                         self._save_checkpoint(checkpoint_path, checkpoint_save_total_limit, global_step)
-        
+                        loss_model.model.base_model.unmerge_adapter()
+                        
         # Save loss, learning rate, gradient norms per epoch => will map out evolution over training steps
         self.save_training_data(training_losses, learning_rates, gradient_norms, output_path)
             
@@ -274,6 +278,22 @@ class LoRaSentenceTransformer(SentenceTransformer):
         with open(training_data_path, "w") as f:
             json.dump(self.training_data, f, indent=4)
             self.training_data.clear()
+    
+    def save_checkpoint_training(self, merged_model, checkpoint_path, checkpoint_save_total_limit, step):
+        # Store new checkpoint
+        merged_model.save(os.path.join(checkpoint_path, str(step)))
+
+        # Delete old checkpoints
+        if checkpoint_save_total_limit is not None and checkpoint_save_total_limit > 0:
+            old_checkpoints = []
+            for subdir in os.listdir(checkpoint_path):
+                if subdir.isdigit():
+                    old_checkpoints.append({"step": int(subdir), "path": os.path.join(checkpoint_path, subdir)})
+
+            if len(old_checkpoints) > checkpoint_save_total_limit:
+                old_checkpoints = sorted(old_checkpoints, key=lambda x: x["step"])
+                shutil.rmtree(old_checkpoints[0]["path"])
+    
     
 def directly_loadable_by_sbert(model: SentenceTransformer):
     loadable_by_sbert = True

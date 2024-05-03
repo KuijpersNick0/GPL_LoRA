@@ -68,11 +68,5 @@ def load_sbert(model_name_or_path, pooling=None, max_seq_length=None):
         logger.info(f"Set max_seq_length={max_seq_length}")
 
      # Layers after Lora
-    
-    print("/n Printing layers /n")
-    for n, m in model.named_modules():
-        print(n, type(m))
-        print()
-    print("/n End of printing layers /n")
-    
+      
     return model

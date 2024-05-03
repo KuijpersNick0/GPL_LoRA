@@ -229,7 +229,8 @@ def train(
 
     ### Train the model with MarginMSE loss ###
     #### This will be skipped if the checkpoint at the indicated training steps can be found ####
-    ckpt_dir = os.path.join(output_dir, str(gpl_steps))
+    checkpoint_path = f"{output_dir}/checkpoints"
+    ckpt_dir = os.path.join(checkpoint_path, str(gpl_steps))
     if not os.path.exists(ckpt_dir) or (
         os.path.exists(ckpt_dir) and not os.listdir(ckpt_dir)
     ):
@@ -259,8 +260,8 @@ def train(
             ],
             epochs=1,
             steps_per_epoch=gpl_steps,
-            warmup_steps=500,
-            checkpoint_save_steps=500,
+            warmup_steps=400,
+            checkpoint_save_steps=1000,
             checkpoint_save_total_limit=10000,
             output_path=output_dir,
             checkpoint_path=checkpoint_path,
