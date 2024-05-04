@@ -260,7 +260,7 @@ def train(
             ],
             epochs=1,
             steps_per_epoch=gpl_steps,
-            warmup_steps=400,
+            warmup_steps=500,
             checkpoint_save_steps=1000,
             checkpoint_save_total_limit=10000,
             output_path=output_dir,

@@ -16,6 +16,7 @@ import time
 import torch.profiler 
 import json 
 import numpy as np
+import copy
 
 logger = logging.getLogger(__name__) 
 
@@ -217,9 +218,10 @@ class LoRaSentenceTransformer(SentenceTransformer):
                         and checkpoint_save_steps > 0
                         and global_step % checkpoint_save_steps == 0
                     ):
-                        loss_model.model.base_model.merge_adapter()
-                        self._save_checkpoint(checkpoint_path, checkpoint_save_total_limit, global_step)
-                        loss_model.model.base_model.unmerge_adapter()
+                        # Only working solution is a deepcopy, load and unload don't work 8 bits model => incompatibility
+                        copy_loss_models = copy.deepcopy(loss_model) 
+                        merged_copy_model = copy_loss_models.model.base_model.merge_and_unload()
+                        merged_copy_model._save_checkpoint(checkpoint_path, checkpoint_save_total_limit, global_step) 
                         
         # Save loss, learning rate, gradient norms per epoch => will map out evolution over training steps
         self.save_training_data(training_losses, learning_rates, gradient_norms, output_path)
