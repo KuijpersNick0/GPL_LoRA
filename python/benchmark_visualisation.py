@@ -25,7 +25,7 @@ def plot_single_metric_over_steps(metric_name, steps, metric_data):
     plt.show()
 
 # Path to the directory containing evaluation JSON files
-evaluation_dir = "C:/Users/Siemens/Documents/TFE_Nick_Kuijpers/LoRa_GPL/GPL_LoRA/evaluation/scifact/distilbert-base-uncased"
+evaluation_dir = "C:/Users/Siemens/Documents/TFE_Nick_Kuijpers/LoRa_GPL/GPL_LoRA/evaluation/LoRa_r16_a32/Siemens/distilbert-base-uncased"
 
 # List to store data for plotting
 steps = []

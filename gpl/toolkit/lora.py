@@ -367,8 +367,8 @@ def load_lora(model_name_or_path, pooling=None, max_seq_length=None):
  
     # Use a default LoRA configuration
     peft_config = LoraConfig(
-        r=8,
-        lora_alpha=32,
+        r=16,
+        lora_alpha=4,
         lora_dropout=0.05,
         bias="none",
         # task_type=TaskType.FEATURE_EXTRACTION,
