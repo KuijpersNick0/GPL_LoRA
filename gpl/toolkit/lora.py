@@ -368,13 +368,14 @@ def load_lora(model_name_or_path, pooling=None, max_seq_length=None):
     # Use a default LoRA configuration
     peft_config = LoraConfig(
         r=16,
-        lora_alpha=4,
+        lora_alpha=64,
         lora_dropout=0.05,
         bias="none",
         # task_type=TaskType.FEATURE_EXTRACTION,
         inference_mode=False,
-        # target_modules=["key", "query", "value"],
+        # target_modules=["key", "query", "value"],  
         target_modules=["q_lin", "k_lin","v_lin"],
+        # target_modules=["q_lin", "k_lin"],
     )
     
     # # Layers before Lora

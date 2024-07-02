@@ -130,15 +130,15 @@ def evaluate(
     
     
 if __name__ == "__main__":
-    checkpoint_dir = "C:/Users/Siemens/Documents/TFE_Nick_Kuijpers/LoRa_GPL/GPL_LoRA/output/Siemens/distilbert-base-uncased/checkpoints" 
+    checkpoint_dir = "C:/Users/Siemens/Documents/TFE_Nick_Kuijpers/LoRa_GPL/GPL_LoRA/output/QKV/LoRa_r16_a64/scifact/google-bert/bert-base-uncased/checkpoints" 
     # Iterate over all files in the directory
     for filename in os.listdir(checkpoint_dir):
         # Check if the file represents a model checkpoint
         if filename.isdigit():  # Assuming model checkpoints are named with numbers
             model_path = os.path.join(checkpoint_dir, filename)
             evaluate(
-                data_path="C:/Users/Siemens/Documents/TFE_Nick_Kuijpers/LoRa_GPL/GPL_LoRA/Siemens",
-                output_dir="C:/Users/Siemens/Documents/TFE_Nick_Kuijpers/LoRa_GPL/GPL_LoRA/evaluation/LoRa_r8_a32/Siemens/distilbert-base-uncased",
+                data_path="C:/Users/Siemens/Documents/TFE_Nick_Kuijpers/LoRa_GPL/GPL_LoRA/scifact",
+                output_dir="C:/Users/Siemens/Documents/TFE_Nick_Kuijpers/LoRa_GPL/GPL_LoRA/evaluation/QKV/LoRa_r16_a64/scifact/google-bert/bert-base-uncased",
                 model_path=model_path,
                 max_seq_length=350,
                 score_function="dot",
